@@ -1,13 +1,11 @@
-use std::{fmt::Debug, future::Future, io::Stdout, pin::Pin};
-
 use crossterm::event::EventStream;
 use futures::{stream::FuturesUnordered, StreamExt};
+use std::{fmt::Debug, future::Future, pin::Pin};
 use tokio::{
     runtime::Handle,
     sync::mpsc,
     task::{JoinError, JoinHandle},
 };
-use tui::{backend::CrosstermBackend, Terminal};
 
 pub enum Command<M> {
     Async(Pin<Box<dyn Future<Output = M> + Send + 'static>>),
@@ -44,69 +42,165 @@ impl<T: Debug + Send + 'static> Debug for Message<T> {
     }
 }
 
-pub trait Model: 'static {
-    type CustomMessage: Debug + Send + 'static;
+pub type OptionalCommand<M> = Option<Command<Message<M>>>;
 
-    fn init(&self) -> Option<Command<Message<Self::CustomMessage>>>;
+pub trait Model: Debug + 'static {
+    type CustomMessage: Debug + Send + 'static;
+    type Writer;
+    type Error: std::error::Error + ToString;
+
+    fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error>;
 
     fn update(
         &mut self,
         msg: Message<Self::CustomMessage>,
-    ) -> Option<Command<Message<Self::CustomMessage>>>;
+    ) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error>;
 
-    fn view(&self, terminal: &mut Terminal<CrosstermBackend<Stdout>>);
+    fn view(&self, writer: &mut Self::Writer) -> Result<(), Self::Error>;
 }
 
-pub async fn run<M: Model>(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    mut model: M,
-) -> Result<(), MessageError> {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Command<Message<M::CustomMessage>>>(32);
-    let cmd_tx_ = cmd_tx.clone();
-    let (msg_tx, mut msg_rx) = mpsc::channel::<Message<M::CustomMessage>>(32);
-    spawn_event_reader::<M>(msg_tx.clone());
-    spawn_message_handler::<M>(msg_tx, cmd_tx, cmd_rx);
+pub struct Program<M: Model> {
+    model: M,
+    cmd_tx: mpsc::Sender<Command<Message<<M as Model>::CustomMessage>>>,
+    cmd_rx: Option<mpsc::Receiver<Command<Message<<M as Model>::CustomMessage>>>>,
+    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
+    msg_rx: mpsc::Receiver<Message<M::CustomMessage>>,
+}
 
-    if let Some(cmd) = model.init() {
-        cmd_tx_
-            .send(cmd)
-            .await
-            .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+impl<M: Model> Program<M> {
+    pub fn new(model: M) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command<Message<M::CustomMessage>>>(32);
+        let (msg_tx, msg_rx) = mpsc::channel::<Message<M::CustomMessage>>(32);
+        Self {
+            model,
+            cmd_tx,
+            cmd_rx: Some(cmd_rx),
+            msg_tx,
+            msg_rx,
+        }
     }
 
-    while let Some(msg) = msg_rx.recv().await {
-        if let QuitBehavior::Quit = handle_update(&mut model, msg, &cmd_tx_).await? {
-            return Ok(());
-        }
-        while let Ok(msg) = msg_rx.try_recv() {
-            if let QuitBehavior::Quit = handle_update(&mut model, msg, &cmd_tx_).await? {
+    pub async fn run(mut self, writer: &mut M::Writer) -> Result<(), ProgramError<M>> {
+        self.initialize().await?;
+
+        while let Some(msg) = self.recv_msg().await {
+            let quit_behavior = self.update(msg).await?;
+            self.view(writer)
+                .map_err(ProgramError::ApplicationFailure)?;
+            if quit_behavior == QuitBehavior::Quit {
                 return Ok(());
             }
         }
-        model.view(terminal);
+
+        Ok(())
     }
 
-    Ok(())
-}
+    pub async fn recv_msg(&mut self) -> Option<Message<M::CustomMessage>> {
+        self.msg_rx.recv().await
+    }
 
-fn spawn_event_reader<M: Model>(
-    msg_tx: mpsc::Sender<Message<<M as Model>::CustomMessage>>,
-) -> tokio::task::JoinHandle<Result<(), MessageError>> {
-    tokio::task::spawn(async move {
-        let mut event_reader = EventStream::new().fuse();
-        while let Some(event) = event_reader.next().await {
-            if let Ok(event) = event {
-                msg_tx
-                    .send(Message::TermEvent(event))
-                    .await
-                    .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+    pub fn view(&self, writer: &mut M::Writer) -> Result<(), M::Error> {
+        self.model.view(writer)
+    }
+
+    pub async fn initialize(&mut self) -> Result<(), ProgramError<M>> {
+        self.spawn_event_reader();
+        self.spawn_message_handler();
+
+        if let Some(cmd) = self
+            .model
+            .init()
+            .map_err(ProgramError::ApplicationFailure)?
+        {
+            self.cmd_tx.send(cmd).await.map_err(|e| {
+                ProgramError::MessageFailure(MessageError::SendFailure(e.to_string()))
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn update(
+        &mut self,
+        msg: Message<<M>::CustomMessage>,
+    ) -> Result<QuitBehavior, ProgramError<M>> {
+        if QuitBehavior::Quit == self.handle_update(msg).await? {
+            return Ok(QuitBehavior::Quit);
+        }
+        while let Ok(msg) = self.msg_rx.try_recv() {
+            if QuitBehavior::Quit == self.handle_update(msg).await? {
+                return Ok(QuitBehavior::Quit);
             }
         }
-        Ok(())
-    })
+
+        Ok(QuitBehavior::Continue)
+    }
+
+    fn spawn_event_reader(&self) -> tokio::task::JoinHandle<Result<(), MessageError>> {
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn(async move {
+            let mut event_reader = EventStream::new().fuse();
+
+            while let Some(event) = event_reader.next().await {
+                if let Ok(event) = event {
+                    msg_tx
+                        .send(Message::TermEvent(event))
+                        .await
+                        .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn spawn_message_handler(&mut self) -> Option<JoinHandle<Result<(), MessageError>>> {
+        if let Some(mut cmd_rx) = self.cmd_rx.take() {
+            let msg_tx = self.msg_tx.clone();
+            let cmd_tx = self.cmd_tx.clone();
+            Some(tokio::task::spawn(async move {
+                let mut futs = FuturesUnordered::<JoinHandle<Result<(), MessageError>>>::default();
+                loop {
+                    tokio::select! {
+                        Some(cmd) = cmd_rx.recv() => {
+                            handle_cmd::<M>(cmd, msg_tx.clone(), cmd_tx.clone(), &mut futs)?;
+                        },
+                        Some(fut) = futs.next() => {
+
+                            fut.map_err(MessageError::JoinFailure)??;
+                        }
+                        else => break
+                    }
+                }
+
+                Ok(())
+            }))
+        } else {
+            None
+        }
+    }
+
+    async fn handle_update(
+        &mut self,
+        msg: Message<M::CustomMessage>,
+    ) -> Result<QuitBehavior, ProgramError<M>> {
+        if let Message::Quit = msg {
+            return Ok(QuitBehavior::Quit);
+        }
+        if let Some(cmd) = self
+            .model
+            .update(msg)
+            .map_err(ProgramError::ApplicationFailure)?
+        {
+            self.cmd_tx.send(cmd).await.map_err(|e| {
+                ProgramError::MessageFailure(MessageError::SendFailure(e.to_string()))
+            })?;
+        }
+        Ok(QuitBehavior::Continue)
+    }
 }
 
-enum QuitBehavior {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuitBehavior {
     Quit,
     Continue,
 }
@@ -116,48 +210,15 @@ pub enum MessageError {
     #[error("{0}")]
     SendFailure(String),
     #[error("{0}")]
-    JoinFailure(#[source] JoinError),
+    JoinFailure(JoinError),
 }
 
-async fn handle_update<M: Model>(
-    model: &mut M,
-    msg: Message<M::CustomMessage>,
-    cmd_tx: &mpsc::Sender<Command<Message<M::CustomMessage>>>,
-) -> Result<QuitBehavior, MessageError> {
-    if let Message::Quit = msg {
-        return Ok(QuitBehavior::Quit);
-    }
-    if let Some(cmd) = model.update(msg) {
-        cmd_tx
-            .send(cmd)
-            .await
-            .map_err(|e| MessageError::SendFailure(e.to_string()))?;
-    }
-    Ok(QuitBehavior::Continue)
-}
-
-fn spawn_message_handler<M: Model>(
-    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
-    cmd_tx: mpsc::Sender<Command<Message<M::CustomMessage>>>,
-    mut cmd_rx: mpsc::Receiver<Command<Message<M::CustomMessage>>>,
-) -> JoinHandle<Result<(), MessageError>> {
-    tokio::task::spawn(async move {
-        let mut futs = FuturesUnordered::<JoinHandle<Result<(), MessageError>>>::default();
-        loop {
-            tokio::select! {
-                Some(cmd) = cmd_rx.recv() => {
-                    handle_cmd::<M>(cmd, msg_tx.clone(), cmd_tx.clone(), &mut futs)?;
-                },
-                Some(fut) = futs.next() => {
-
-                    fut.map_err(MessageError::JoinFailure)??;
-                }
-                else => break
-            }
-        }
-
-        Ok(())
-    })
+#[derive(thiserror::Error, Debug)]
+pub enum ProgramError<M: Model> {
+    #[error("{0}")]
+    MessageFailure(MessageError),
+    #[error("{0}")]
+    ApplicationFailure(M::Error),
 }
 
 fn handle_cmd<M: Model>(

@@ -1,12 +1,11 @@
-use std::{
-    error::Error,
-    io::{self, Stdout},
-};
-
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use std::{
+    error::Error,
+    io::{self, Stdout},
 };
 use tui::{
     backend::CrosstermBackend,
@@ -14,7 +13,7 @@ use tui::{
     widgets::{List, ListItem, ListState},
     Frame, Terminal,
 };
-use tui_elm::{run, Command, Message, Model};
+use tui_elm::{Command, Message, Model, OptionalCommand, Program};
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
@@ -24,7 +23,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    run(&mut terminal, App::default()).await?;
+    let program = Program::new(App::default());
+    program.run(&mut terminal).await?;
 
     disable_raw_mode()?;
     execute!(
@@ -41,7 +41,7 @@ pub enum AppMessage {
     SetListItems(Vec<String>),
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct App {
     list_items: Vec<String>,
     list_index: Option<usize>,
@@ -50,20 +50,22 @@ pub struct App {
 
 impl Model for App {
     type CustomMessage = AppMessage;
+    type Writer = Terminal<CrosstermBackend<io::Stdout>>;
+    type Error = io::Error;
 
-    fn init(&self) -> Option<Command<Message<Self::CustomMessage>>> {
-        Some(Command::new_async(async move {
+    fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
+        Ok(Some(Command::new_async(async move {
             Message::Custom(AppMessage::SetListItems(vec![
                 "first item".to_owned(),
                 "second_item".to_owned(),
             ]))
-        }))
+        })))
     }
 
     fn update(
         &mut self,
         msg: tui_elm::Message<Self::CustomMessage>,
-    ) -> Option<Command<Message<Self::CustomMessage>>> {
+    ) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
         match msg {
             Message::Custom(AppMessage::SetListItems(items)) => {
                 self.list_items = items;
@@ -77,7 +79,7 @@ impl Model for App {
                 code: KeyCode::Char('q' | 'Q'),
                 ..
             })) => {
-                return Some(Command::new_async(async move { Message::Quit }));
+                return Ok(Some(Command::new_async(async move { Message::Quit })));
             }
             Message::TermEvent(Event::Key(KeyEvent {
                 code: KeyCode::Up, ..
@@ -102,13 +104,15 @@ impl Model for App {
             }
             _ => {}
         }
-        None
+        Ok(None)
     }
 
-    fn view(&self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
-        terminal.draw(|f| ui(f, self)).unwrap();
+    fn view(&self, terminal: &mut Self::Writer) -> Result<(), Self::Error> {
+        terminal.draw(|f| ui(f, self))?;
+        Ok(())
     }
 }
+
 fn ui(f: &mut Frame<CrosstermBackend<Stdout>>, app: &App) {
     let items: Vec<ListItem> = app
         .list_items
