@@ -7,16 +7,16 @@ use tokio::{
 };
 
 pub enum Command<M> {
-    Async(Pin<Box<dyn Future<Output = M> + Send + 'static>>),
-    Blocking(Box<dyn FnOnce() -> M + Send + 'static>),
+    Async(Pin<Box<dyn Future<Output = Option<M>> + Send + 'static>>),
+    Blocking(Box<dyn FnOnce() -> Option<M> + Send + 'static>),
 }
 
 impl<M> Command<M> {
-    pub fn new_async<F: Future<Output = M> + Send + 'static>(f: F) -> Self {
+    pub fn new_async<F: Future<Output = Option<M>> + Send + 'static>(f: F) -> Self {
         Self::Async(Box::pin(async move { f.await }))
     }
 
-    pub fn new_blocking(f: impl FnOnce() -> M + Send + 'static) -> Self {
+    pub fn new_blocking(f: impl FnOnce() -> Option<M> + Send + 'static) -> Self {
         Self::Blocking(Box::new(f))
     }
 }
@@ -276,14 +276,14 @@ fn handle_cmd<M: Model>(
 }
 
 async fn handle_msg<M: Model>(
-    msg: Message<M::CustomMessage>,
+    msg: Option<Message<M::CustomMessage>>,
     msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
     cmd_tx: mpsc::Sender<Command<Message<M::CustomMessage>>>,
 ) -> Result<(), MessageError> {
     let mut futs = FuturesUnordered::<JoinHandle<Result<(), MessageError>>>::default();
 
     match msg {
-        Message::Batch(cmds) => {
+        Some(Message::Batch(cmds)) => {
             for cmd in cmds {
                 cmd_tx
                     .send(cmd)
@@ -291,18 +291,19 @@ async fn handle_msg<M: Model>(
                     .map_err(|e| MessageError::SendFailure(e.to_string()))?;
             }
         }
-        Message::Sequence(cmds) => {
+        Some(Message::Sequence(cmds)) => {
             let msg_tx = msg_tx.clone();
             futs.push(tokio::task::spawn(async move {
                 handle_sequence_cmd::<M>(cmds, msg_tx).await
             }));
         }
-        msg => {
+        Some(msg) => {
             msg_tx
                 .send(msg)
                 .await
                 .map_err(|e| MessageError::SendFailure(e.to_string()))?;
         }
+        None => {}
     }
 
     while let Some(fut) = futs.next().await {
@@ -319,18 +320,22 @@ async fn handle_sequence_cmd<M: Model>(
     for command in cmds {
         match command {
             Command::Async(cmd) => {
-                msg_tx
-                    .send(cmd.await)
-                    .await
-                    .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+                if let Some(msg) = cmd.await {
+                    msg_tx
+                        .send(msg)
+                        .await
+                        .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+                }
             }
             Command::Blocking(cmd) => {
                 let msg_tx = msg_tx.clone();
                 let handle: JoinHandle<Result<(), MessageError>> =
                     tokio::task::spawn_blocking(move || {
-                        msg_tx
-                            .blocking_send(cmd())
-                            .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+                        if let Some(msg) = cmd() {
+                            msg_tx
+                                .blocking_send(msg)
+                                .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+                        }
 
                         Ok(())
                     });

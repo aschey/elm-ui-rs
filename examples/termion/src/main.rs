@@ -48,10 +48,10 @@ impl Model for App {
 
     fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
         Ok(Some(Command::new_async(async move {
-            Message::Custom(AppMessage::SetListItems(vec![
+            Some(Message::Custom(AppMessage::SetListItems(vec![
                 "first item".to_owned(),
                 "second_item".to_owned(),
-            ]))
+            ])))
         })))
     }
 
@@ -69,7 +69,7 @@ impl Model for App {
                 }
             }
             Message::TermEvent(Event::Key(Key::Char('q' | 'Q'))) => {
-                return Ok(Some(Command::new_async(async move { Message::Quit })));
+                return Ok(Some(Command::new_async(async move { Some(Message::Quit) })));
             }
             Message::TermEvent(Event::Key(Key::Up)) => {
                 if let Some(list_index) = self.list_index.as_mut() {
