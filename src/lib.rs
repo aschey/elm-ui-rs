@@ -1,4 +1,3 @@
-use crossterm::event::EventStream;
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::{fmt::Debug, future::Future, pin::Pin};
 use tokio::{
@@ -25,7 +24,10 @@ impl<M> Command<M> {
 pub enum Message<T: Debug + Send + 'static> {
     Batch(Vec<Command<Message<T>>>),
     Sequence(Vec<Command<Message<T>>>),
+    #[cfg(all(not(feature = "termion"), feature = "crossterm"))]
     TermEvent(crossterm::event::Event),
+    #[cfg(feature = "termion")]
+    TermEvent(termion::event::Event),
     Quit,
     Custom(T),
 }
@@ -35,6 +37,7 @@ impl<T: Debug + Send + 'static> Debug for Message<T> {
         match self {
             Self::Batch(_) => f.debug_tuple("Batch").field(&"[Commands]").finish(),
             Self::Sequence(_) => f.debug_tuple("Sequence").field(&"[Commands]").finish(),
+            #[cfg(any(feature = "termion", feature = "crossterm"))]
             Self::TermEvent(arg0) => f.debug_tuple("TermEvent").field(arg0).finish(),
             Self::Quit => write!(f, "Quit"),
             Self::Custom(arg0) => f.debug_tuple("Custom").field(arg0).finish(),
@@ -104,6 +107,7 @@ impl<M: Model> Program<M> {
     }
 
     pub async fn initialize(&mut self) -> Result<(), ProgramError<M>> {
+        #[cfg(any(feature = "termion", feature = "crossterm"))]
         self.spawn_event_reader();
         self.spawn_message_handler();
 
@@ -136,10 +140,11 @@ impl<M: Model> Program<M> {
         Ok(QuitBehavior::Continue)
     }
 
+    #[cfg(all(not(feature = "termion"), feature = "crossterm"))]
     fn spawn_event_reader(&self) -> tokio::task::JoinHandle<Result<(), MessageError>> {
         let msg_tx = self.msg_tx.clone();
         tokio::task::spawn(async move {
-            let mut event_reader = EventStream::new().fuse();
+            let mut event_reader = crossterm::event::EventStream::new().fuse();
 
             while let Some(event) = event_reader.next().await {
                 if let Ok(event) = event {
@@ -149,6 +154,23 @@ impl<M: Model> Program<M> {
                         .map_err(|e| MessageError::SendFailure(e.to_string()))?;
                 }
             }
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "termion")]
+    fn spawn_event_reader(&self) -> tokio::task::JoinHandle<Result<(), MessageError>> {
+        use termion::input::TermRead;
+
+        let msg_tx = self.msg_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let stdin = std::io::stdin();
+            for event in stdin.events().flatten() {
+                msg_tx
+                    .blocking_send(Message::TermEvent(event))
+                    .map_err(|e| MessageError::SendFailure(e.to_string()))?;
+            }
+
             Ok(())
         })
     }
