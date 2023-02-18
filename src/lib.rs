@@ -1,38 +1,69 @@
 use futures::{stream::FuturesUnordered, StreamExt};
-use std::{fmt::Debug, future::Future, pin::Pin};
+use std::{
+    any::Any,
+    fmt::Debug,
+    future::{self, Future},
+    pin::Pin,
+    sync::Arc,
+};
 use tokio::{
     runtime::Handle,
     sync::mpsc,
     task::{JoinError, JoinHandle},
 };
 
-pub enum Command<M> {
-    Async(Pin<Box<dyn Future<Output = Option<M>> + Send + 'static>>),
-    Blocking(Box<dyn FnOnce() -> Option<M> + Send + 'static>),
+pub enum Command {
+    Async(
+        Box<
+            dyn FnOnce(
+                    mpsc::Sender<Command>,
+                ) -> Pin<Box<dyn Future<Output = Option<Message>> + Send>>
+                + Send,
+        >,
+    ),
+    Blocking(Box<dyn FnOnce(mpsc::Sender<Command>) -> Option<Message> + Send + 'static>),
 }
 
-impl<M> Command<M> {
-    pub fn new_async<F: Future<Output = Option<M>> + Send + 'static>(f: F) -> Self {
-        Self::Async(Box::pin(async move { f.await }))
+impl Command {
+    pub fn new_async<F: Future<Output = Option<Message>> + Send + 'static>(
+        f: impl FnOnce(mpsc::Sender<Command>) -> F + Send + 'static,
+    ) -> Self {
+        Self::Async(Box::new(|sender| Box::pin(async move { f(sender).await })))
     }
 
-    pub fn new_blocking(f: impl FnOnce() -> Option<M> + Send + 'static) -> Self {
+    pub fn new_blocking(
+        f: impl FnOnce(mpsc::Sender<Command>) -> Option<Message> + Send + 'static,
+    ) -> Self {
         Self::Blocking(Box::new(f))
     }
+
+    pub fn simple(msg: Message) -> Self {
+        Self::new_async(|_| future::ready(Some(msg)))
+    }
+
+    pub fn quit() -> Self {
+        Self::simple(Message::Quit)
+    }
 }
 
-pub enum Message<T: Debug + Send + 'static> {
-    Batch(Vec<Command<Message<T>>>),
-    Sequence(Vec<Command<Message<T>>>),
+pub enum Message {
+    Batch(Vec<Command>),
+    Sequence(Vec<Command>),
     #[cfg(all(not(feature = "termion"), feature = "crossterm"))]
     TermEvent(crossterm::event::Event),
     #[cfg(feature = "termion")]
     TermEvent(termion::event::Event),
     Quit,
-    Custom(T),
+    Custom(Box<dyn Any + Send>),
 }
 
-impl<T: Debug + Send + 'static> Debug for Message<T> {
+impl Message {
+    pub fn custom(msg: impl Any + Send) -> Self {
+        Self::Custom(Box::new(msg))
+    }
+}
+
+impl Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Batch(_) => f.debug_tuple("Batch").field(&"[Commands]").finish(),
@@ -45,35 +76,31 @@ impl<T: Debug + Send + 'static> Debug for Message<T> {
     }
 }
 
-pub type OptionalCommand<M> = Option<Command<Message<M>>>;
+pub type OptionalCommand = Option<Command>;
 
-pub trait Model: Debug + 'static {
-    type CustomMessage: Debug + Send + 'static;
+pub trait Model {
     type Writer;
     type Error: std::error::Error + ToString;
 
-    fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error>;
+    fn init(&self) -> Result<OptionalCommand, Self::Error>;
 
-    fn update(
-        &mut self,
-        msg: Message<Self::CustomMessage>,
-    ) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error>;
+    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error>;
 
     fn view(&self, writer: &mut Self::Writer) -> Result<(), Self::Error>;
 }
 
 pub struct Program<M: Model> {
     model: M,
-    cmd_tx: mpsc::Sender<Command<Message<<M as Model>::CustomMessage>>>,
-    cmd_rx: Option<mpsc::Receiver<Command<Message<<M as Model>::CustomMessage>>>>,
-    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
-    msg_rx: mpsc::Receiver<Message<M::CustomMessage>>,
+    cmd_tx: mpsc::Sender<Command>,
+    cmd_rx: Option<mpsc::Receiver<Command>>,
+    msg_tx: mpsc::Sender<Message>,
+    msg_rx: mpsc::Receiver<Message>,
 }
 
 impl<M: Model> Program<M> {
     pub fn new(model: M) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<Command<Message<M::CustomMessage>>>(32);
-        let (msg_tx, msg_rx) = mpsc::channel::<Message<M::CustomMessage>>(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(32);
+        let (msg_tx, msg_rx) = mpsc::channel::<Message>(32);
         Self {
             model,
             cmd_tx,
@@ -98,7 +125,11 @@ impl<M: Model> Program<M> {
         Ok(())
     }
 
-    pub async fn recv_msg(&mut self) -> Option<Message<M::CustomMessage>> {
+    pub fn cmd_tx(&self) -> mpsc::Sender<Command> {
+        self.cmd_tx.clone()
+    }
+
+    pub async fn recv_msg(&mut self) -> Option<Message> {
         self.msg_rx.recv().await
     }
 
@@ -124,10 +155,7 @@ impl<M: Model> Program<M> {
         Ok(())
     }
 
-    pub async fn update(
-        &mut self,
-        msg: Message<<M>::CustomMessage>,
-    ) -> Result<QuitBehavior, ProgramError<M>> {
+    pub async fn update(&mut self, msg: Message) -> Result<QuitBehavior, ProgramError<M>> {
         if QuitBehavior::Quit == self.handle_update(msg).await? {
             return Ok(QuitBehavior::Quit);
         }
@@ -201,16 +229,13 @@ impl<M: Model> Program<M> {
         }
     }
 
-    async fn handle_update(
-        &mut self,
-        msg: Message<M::CustomMessage>,
-    ) -> Result<QuitBehavior, ProgramError<M>> {
+    async fn handle_update(&mut self, msg: Message) -> Result<QuitBehavior, ProgramError<M>> {
         if let Message::Quit = msg {
             return Ok(QuitBehavior::Quit);
         }
         if let Some(cmd) = self
             .model
-            .update(msg)
+            .update(Arc::new(msg))
             .map_err(ProgramError::ApplicationFailure)?
         {
             self.cmd_tx.send(cmd).await.map_err(|e| {
@@ -244,21 +269,21 @@ pub enum ProgramError<M: Model> {
 }
 
 fn handle_cmd<M: Model>(
-    cmd: Command<Message<M::CustomMessage>>,
-    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
-    cmd_tx: mpsc::Sender<Command<Message<M::CustomMessage>>>,
+    cmd: Command,
+    msg_tx: mpsc::Sender<Message>,
+    cmd_tx: mpsc::Sender<Command>,
     futs: &mut FuturesUnordered<JoinHandle<Result<(), MessageError>>>,
 ) -> Result<(), MessageError> {
     match cmd {
         Command::Async(cmd) => {
             futs.push(tokio::task::spawn(async move {
-                let msg = cmd.await;
+                let msg = cmd(cmd_tx.clone()).await;
                 handle_msg::<M>(msg, msg_tx, cmd_tx).await
             }));
         }
         Command::Blocking(cmd) => {
             futs.push(tokio::task::spawn_blocking(move || {
-                let msg = cmd();
+                let msg = cmd(cmd_tx.clone());
 
                 let handle: JoinHandle<Result<(), MessageError>> = tokio::task::spawn(async move {
                     handle_msg::<M>(msg, msg_tx, cmd_tx).await?;
@@ -276,9 +301,9 @@ fn handle_cmd<M: Model>(
 }
 
 async fn handle_msg<M: Model>(
-    msg: Option<Message<M::CustomMessage>>,
-    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
-    cmd_tx: mpsc::Sender<Command<Message<M::CustomMessage>>>,
+    msg: Option<Message>,
+    msg_tx: mpsc::Sender<Message>,
+    cmd_tx: mpsc::Sender<Command>,
 ) -> Result<(), MessageError> {
     let mut futs = FuturesUnordered::<JoinHandle<Result<(), MessageError>>>::default();
 
@@ -293,8 +318,9 @@ async fn handle_msg<M: Model>(
         }
         Some(Message::Sequence(cmds)) => {
             let msg_tx = msg_tx.clone();
+            let cmd_tx = cmd_tx.clone();
             futs.push(tokio::task::spawn(async move {
-                handle_sequence_cmd::<M>(cmds, msg_tx).await
+                handle_sequence_cmd::<M>(cmds, cmd_tx, msg_tx).await
             }));
         }
         Some(msg) => {
@@ -314,13 +340,14 @@ async fn handle_msg<M: Model>(
 }
 
 async fn handle_sequence_cmd<M: Model>(
-    cmds: Vec<Command<Message<<M as Model>::CustomMessage>>>,
-    msg_tx: mpsc::Sender<Message<M::CustomMessage>>,
+    cmds: Vec<Command>,
+    cmd_tx: mpsc::Sender<Command>,
+    msg_tx: mpsc::Sender<Message>,
 ) -> Result<(), MessageError> {
     for command in cmds {
         match command {
             Command::Async(cmd) => {
-                if let Some(msg) = cmd.await {
+                if let Some(msg) = cmd(cmd_tx.clone()).await {
                     msg_tx
                         .send(msg)
                         .await
@@ -329,9 +356,10 @@ async fn handle_sequence_cmd<M: Model>(
             }
             Command::Blocking(cmd) => {
                 let msg_tx = msg_tx.clone();
+                let cmd_tx = cmd_tx.clone();
                 let handle: JoinHandle<Result<(), MessageError>> =
                     tokio::task::spawn_blocking(move || {
-                        if let Some(msg) = cmd() {
+                        if let Some(msg) = cmd(cmd_tx) {
                             msg_tx
                                 .blocking_send(msg)
                                 .map_err(|e| MessageError::SendFailure(e.to_string()))?;

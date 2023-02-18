@@ -6,6 +6,7 @@ use crossterm::{
 use std::{
     error::Error,
     io::{self, Stdout},
+    sync::Arc,
 };
 use tui::{
     backend::CrosstermBackend,
@@ -48,38 +49,50 @@ pub struct App {
     list_state: ListState,
 }
 
+impl App {
+    fn ui(&self, f: &mut Frame<CrosstermBackend<Stdout>>) {
+        let items: Vec<ListItem> = self
+            .list_items
+            .iter()
+            .map(|l| ListItem::new(l.clone()))
+            .collect();
+        f.render_stateful_widget(
+            List::new(items).highlight_style(Style::default().fg(Color::Green).bg(Color::Black)),
+            f.size(),
+            &mut self.list_state.clone(),
+        )
+    }
+}
+
 impl Model for App {
-    type CustomMessage = AppMessage;
     type Writer = Terminal<CrosstermBackend<io::Stdout>>;
     type Error = io::Error;
 
-    fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
-        Ok(Some(Command::new_async(async move {
-            Some(Message::Custom(AppMessage::SetListItems(vec![
-                "first item".to_owned(),
-                "second_item".to_owned(),
-            ])))
-        })))
+    fn init(&self) -> Result<OptionalCommand, Self::Error> {
+        Ok(Some(Command::simple(Message::Custom(Box::new(
+            AppMessage::SetListItems(vec!["first item".to_owned(), "second_item".to_owned()]),
+        )))))
     }
 
-    fn update(
-        &mut self,
-        msg: tui_elm::Message<Self::CustomMessage>,
-    ) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
-        match msg {
-            Message::Custom(AppMessage::SetListItems(items)) => {
-                self.list_items = items;
-                if self.list_items.is_empty() {
-                    self.list_index = None;
-                } else {
-                    self.list_index = Some(0);
+    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+        match msg.as_ref() {
+            Message::Custom(msg) => {
+                if let Some(AppMessage::SetListItems(items)) = msg.downcast_ref::<AppMessage>() {
+                    self.list_items = items.clone();
+                    if self.list_items.is_empty() {
+                        self.list_index = None;
+                    } else {
+                        self.list_index = Some(0);
+                    }
                 }
             }
             Message::TermEvent(Event::Key(KeyEvent {
                 code: KeyCode::Char('q' | 'Q'),
                 ..
             })) => {
-                return Ok(Some(Command::new_async(async move { Some(Message::Quit) })));
+                return Ok(Some(Command::new_async(
+                    |_| async move { Some(Message::Quit) },
+                )));
             }
             Message::TermEvent(Event::Key(KeyEvent {
                 code: KeyCode::Up, ..
@@ -108,20 +121,7 @@ impl Model for App {
     }
 
     fn view(&self, terminal: &mut Self::Writer) -> Result<(), Self::Error> {
-        terminal.draw(|f| ui(f, self))?;
+        terminal.draw(|f| self.ui(f))?;
         Ok(())
     }
-}
-
-fn ui(f: &mut Frame<CrosstermBackend<Stdout>>, app: &App) {
-    let items: Vec<ListItem> = app
-        .list_items
-        .iter()
-        .map(|l| ListItem::new(l.clone()))
-        .collect();
-    f.render_stateful_widget(
-        List::new(items).highlight_style(Style::default().fg(Color::Green).bg(Color::Black)),
-        f.size(),
-        &mut app.list_state.clone(),
-    )
 }

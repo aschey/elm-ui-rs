@@ -13,5 +13,9 @@ termion = {version = "1.5", optional = true}
 thiserror = "1.0.38"
 tokio = {version = "1.25.0", features = ["sync", "rt-multi-thread", "macros"]}
 
+[dev-dependencies]
+derive_more = {version = "0.99.17", default_features = false, features = ["try_into"]}
+tui = "0.19.0"
+
 [features]
 default = ["crossterm"]
