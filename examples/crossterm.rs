@@ -68,7 +68,7 @@ impl Model for App {
     type Writer = Terminal<CrosstermBackend<io::Stdout>>;
     type Error = io::Error;
 
-    fn init(&self) -> Result<OptionalCommand, Self::Error> {
+    fn init(&mut self) -> Result<OptionalCommand, Self::Error> {
         Ok(Some(Command::simple(Message::Custom(Box::new(
             AppMessage::SetListItems(vec!["first item".to_owned(), "second_item".to_owned()]),
         )))))
@@ -90,9 +90,9 @@ impl Model for App {
                 code: KeyCode::Char('q' | 'Q'),
                 ..
             })) => {
-                return Ok(Some(Command::new_async(
-                    |_| async move { Some(Message::Quit) },
-                )));
+                return Ok(Some(Command::new_async(|_, _| async move {
+                    Some(Message::Quit)
+                })));
             }
             Message::TermEvent(Event::Key(KeyEvent {
                 code: KeyCode::Up, ..
