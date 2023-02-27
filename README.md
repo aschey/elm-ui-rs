@@ -1,2 +1,3 @@
-# tui-elm
-Elm architecture for tui-rs
+# elm-ui-rs
+
+Elm architecture for Rust
