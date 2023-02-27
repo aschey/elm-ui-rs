@@ -103,6 +103,7 @@ impl Debug for Message {
             Self::Batch(arg0) => f.debug_tuple("Batch").field(arg0).finish(),
             Self::Sequence(arg0) => f.debug_tuple("Sequence").field(arg0).finish(),
             Self::Stream(_) => f.debug_tuple("Stream").field(&"<stream>").finish(),
+            #[cfg(any(feature = "termion", feature = "crossterm"))]
             Self::TermEvent(arg0) => f.debug_tuple("TermEvent").field(arg0).finish(),
             Self::Quit => write!(f, "Quit"),
             Self::CancelAll => write!(f, "CancelAll"),
@@ -157,6 +158,8 @@ impl<M: Model> Program<M> {
 
     pub async fn run(mut self, writer: &mut M::Writer) -> Result<(), ProgramError<M>> {
         self.initialize().await?;
+        self.view(writer)
+            .map_err(ProgramError::ApplicationFailure)?;
         while let Some(msg) = self.recv_msg().await {
             let quit_behavior = self.update(msg).await?;
             self.view(writer)
