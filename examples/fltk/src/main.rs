@@ -1,5 +1,6 @@
 use std::{io, time::Duration};
 
+use elm_ui::{Command, Message, Model, OptionalCommand, Program};
 use fltk::{
     app,
     button::Button,
@@ -8,8 +9,6 @@ use fltk::{
     prelude::*,
     window::Window,
 };
-use tokio::task;
-use tui_elm::{Command, Message, Model, Program};
 
 fn main() {
     let app = app::App::default();
@@ -62,16 +61,7 @@ fn main() {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let local_set = task::LocalSet::new();
-            local_set
-                .run_until(async {
-                    task::spawn_local(async move {
-                        program.run(&mut frame).await.unwrap();
-                    })
-                    .await
-                    .unwrap();
-                })
-                .await;
+            program.run(&mut frame).await.unwrap();
         });
     });
 
@@ -94,17 +84,14 @@ impl Model for App {
     type Writer = Frame;
     type Error = io::Error;
 
-    fn init(&mut self) -> Result<tui_elm::OptionalCommand, Self::Error> {
+    fn init(&mut self) -> Result<OptionalCommand, Self::Error> {
         Ok(Some(Command::new_async(|_, _| async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
             Some(Message::custom(AppMessage::AutoIncrement))
         })))
     }
 
-    fn update(
-        &mut self,
-        msg: std::sync::Arc<tui_elm::Message>,
-    ) -> Result<tui_elm::OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: std::sync::Arc<Message>) -> Result<OptionalCommand, Self::Error> {
         if let Message::Custom(custom_msg) = msg.as_ref() {
             if let Some(msg) = custom_msg.downcast_ref::<AppMessage>() {
                 match msg {

@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use tui_elm::{Command, Message, Model, Program};
+use elm_ui::{Command, Message, Model, OptionalCommand, Program};
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
@@ -25,17 +25,14 @@ impl Model for App {
 
     type Error = io::Error;
 
-    fn init(&mut self) -> Result<tui_elm::OptionalCommand, Self::Error> {
+    fn init(&mut self) -> Result<OptionalCommand, Self::Error> {
         Ok(Some(Command::new_async(|_, _| async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
             Some(Message::custom(TickMsg(1)))
         })))
     }
 
-    fn update(
-        &mut self,
-        msg: std::sync::Arc<tui_elm::Message>,
-    ) -> Result<tui_elm::OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: std::sync::Arc<Message>) -> Result<OptionalCommand, Self::Error> {
         if let Message::Custom(custom_msg) = msg.as_ref() {
             if let Some(TickMsg(seq_num)) = custom_msg.downcast_ref() {
                 let seq_num = *seq_num;

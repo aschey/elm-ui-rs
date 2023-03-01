@@ -1,3 +1,4 @@
+use elm_ui::{Command, Message, Model, OptionalCommand, Program};
 use std::{
     error::Error,
     io::{self, Stdout},
@@ -14,7 +15,6 @@ use tui::{
     widgets::{List, ListItem, ListState},
     Frame, Terminal,
 };
-use tui_elm::{Command, Message, Model, OptionalCommand, Program};
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
