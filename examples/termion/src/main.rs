@@ -2,6 +2,7 @@ use elm_ui::{Command, Message, Model, OptionalCommand, Program};
 use std::{
     error::Error,
     io::{self, Stdout},
+    sync::Arc,
 };
 use termion::{
     event::{Event, Key},
@@ -42,34 +43,30 @@ pub struct App {
 }
 
 impl Model for App {
-    type CustomMessage = AppMessage;
     type Writer = Terminal<TermionBackend<AlternateScreen<MouseTerminal<RawTerminal<Stdout>>>>>;
     type Error = io::Error;
 
-    fn init(&self) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
-        Ok(Some(Command::new_async(async move {
-            Some(Message::Custom(AppMessage::SetListItems(vec![
-                "first item".to_owned(),
-                "second_item".to_owned(),
-            ])))
-        })))
+    fn init(&mut self) -> Result<OptionalCommand, Self::Error> {
+        Ok(Some(Command::simple(Message::Custom(Box::new(
+            AppMessage::SetListItems(vec!["first item".to_owned(), "second_item".to_owned()]),
+        )))))
     }
 
-    fn update(
-        &mut self,
-        msg: tui_elm::Message<Self::CustomMessage>,
-    ) -> Result<OptionalCommand<Self::CustomMessage>, Self::Error> {
-        match msg {
-            Message::Custom(AppMessage::SetListItems(items)) => {
-                self.list_items = items;
-                if self.list_items.is_empty() {
-                    self.list_index = None;
-                } else {
-                    self.list_index = Some(0);
+    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+        match msg.as_ref() {
+            Message::Custom(msg) => {
+                if let Some(AppMessage::SetListItems(items)) = msg.downcast_ref::<AppMessage>() {
+                    self.list_items = items.clone();
+                    if self.list_items.is_empty() {
+                        self.list_index = None;
+                    } else {
+                        self.list_index = Some(0);
+                        self.list_state.select(self.list_index);
+                    }
                 }
             }
             Message::TermEvent(Event::Key(Key::Char('q' | 'Q'))) => {
-                return Ok(Some(Command::new_async(async move { Some(Message::Quit) })));
+                return Ok(Some(Command::simple(Message::Quit)));
             }
             Message::TermEvent(Event::Key(Key::Up)) => {
                 if let Some(list_index) = self.list_index.as_mut() {

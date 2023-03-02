@@ -83,6 +83,7 @@ impl Model for App {
                         self.list_index = None;
                     } else {
                         self.list_index = Some(0);
+                        self.list_state.select(self.list_index);
                     }
                 }
             }
@@ -90,9 +91,7 @@ impl Model for App {
                 code: KeyCode::Char('q' | 'Q'),
                 ..
             })) => {
-                return Ok(Some(Command::new_async(|_, _| async move {
-                    Some(Message::Quit)
-                })));
+                return Ok(Some(Command::simple(Message::Quit)));
             }
             Message::TermEvent(Event::Key(KeyEvent {
                 code: KeyCode::Up, ..
