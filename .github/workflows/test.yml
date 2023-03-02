@@ -12,6 +12,6 @@ jobs:
           shared-key: cache-${{ hashFiles('**/Cargo.toml') }}
       - name: Test
         run: |
-          - cargo build
-          - (cd examples/termion && cargo build)
-          - (cd examples/fltk && cargo build)
+          cargo build
+          (cd examples/termion && cargo build)
+          (cd examples/fltk && cargo build)
