@@ -4,7 +4,7 @@ name = "termion_example"
 version = "0.1.0"
 
 [dependencies]
-elm-ui = {path = "../..", default-features = false, features = ["termion"]}
+elm-ui = {path = "../.."}
 termion = {version = "1.5"}
 tokio = {version = "1.25.0", features = ["sync", "rt-multi-thread", "macros"]}
 tui = {version = "0.19.0", default-features = false, features = ["termion"]}

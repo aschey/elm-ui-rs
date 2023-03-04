@@ -86,10 +86,8 @@ pub enum Message {
     Batch(Vec<Command>),
     Sequence(Vec<Command>),
     Stream(Pin<Box<dyn Stream<Item = Message> + Send>>),
-    #[cfg(all(not(feature = "termion"), feature = "crossterm"))]
+    #[cfg(feature = "crossterm")]
     TermEvent(crossterm::event::Event),
-    #[cfg(feature = "termion")]
-    TermEvent(termion::event::Event),
     Quit,
     CancelAll,
     Cancel(String),
@@ -103,7 +101,7 @@ impl Debug for Message {
             Self::Batch(arg0) => f.debug_tuple("Batch").field(arg0).finish(),
             Self::Sequence(arg0) => f.debug_tuple("Sequence").field(arg0).finish(),
             Self::Stream(_) => f.debug_tuple("Stream").field(&"<stream>").finish(),
-            #[cfg(any(feature = "termion", feature = "crossterm"))]
+            #[cfg(feature = "crossterm")]
             Self::TermEvent(arg0) => f.debug_tuple("TermEvent").field(arg0).finish(),
             Self::Quit => write!(f, "Quit"),
             Self::CancelAll => write!(f, "CancelAll"),
@@ -139,6 +137,9 @@ pub struct Program<M: Model> {
     cmd_rx: Option<mpsc::Receiver<Command>>,
     msg_tx: mpsc::Sender<Message>,
     msg_rx: mpsc::Receiver<Message>,
+    event_handler_task: Option<task::JoinHandle<Result<(), MessageError>>>,
+    message_handler_task: Option<JoinHandle<Result<(), MessageError>>>,
+    handler_cancellation_token: CancellationToken,
     cancellation_tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
@@ -152,6 +153,9 @@ impl<M: Model> Program<M> {
             cmd_rx: Some(cmd_rx),
             msg_tx,
             msg_rx,
+            event_handler_task: None,
+            message_handler_task: None,
+            handler_cancellation_token: CancellationToken::new(),
             cancellation_tokens: Default::default(),
         }
     }
@@ -165,6 +169,17 @@ impl<M: Model> Program<M> {
             self.view(writer)
                 .map_err(ProgramError::ApplicationFailure)?;
             if quit_behavior == QuitBehavior::Quit {
+                for token in self.cancellation_tokens.lock().unwrap().values() {
+                    token.cancel();
+                }
+                self.handler_cancellation_token.cancel();
+                if let Some(handler) = self.event_handler_task.take() {
+                    handler.await.unwrap().unwrap();
+                }
+
+                if let Some(handler) = self.message_handler_task.take() {
+                    handler.await.unwrap().unwrap();
+                }
                 return Ok(());
             }
         }
@@ -184,9 +199,14 @@ impl<M: Model> Program<M> {
     }
 
     pub async fn initialize(&mut self) -> Result<(), ProgramError<M>> {
-        #[cfg(any(feature = "termion", feature = "crossterm"))]
-        self.spawn_event_reader();
-        self.spawn_message_handler();
+        #[cfg(feature = "crossterm")]
+        {
+            self.event_handler_task =
+                Some(self.spawn_event_reader(self.handler_cancellation_token.clone()));
+        }
+        self.message_handler_task =
+            self.spawn_message_handler(self.handler_cancellation_token.clone());
+
         if let Some(cmd) = self
             .model
             .init()
@@ -211,12 +231,21 @@ impl<M: Model> Program<M> {
         Ok(QuitBehavior::Continue)
     }
 
-    #[cfg(all(not(feature = "termion"), feature = "crossterm"))]
-    fn spawn_event_reader(&self) -> tokio::task::JoinHandle<Result<(), MessageError>> {
+    #[cfg(feature = "crossterm")]
+    fn spawn_event_reader(
+        &self,
+        cancellation_token: CancellationToken,
+    ) -> task::JoinHandle<Result<(), MessageError>> {
+        use future_ext::FutureExt;
+
         let msg_tx = self.msg_tx.clone();
-        tokio::task::spawn(async move {
+        task::spawn(async move {
             let mut event_reader = crossterm::event::EventStream::new().fuse();
-            while let Some(event) = event_reader.next().await {
+            while let Ok(Some(event)) = event_reader
+                .next()
+                .cancel_on_shutdown(&cancellation_token)
+                .await
+            {
                 if let Ok(event) = event {
                     msg_tx
                         .send(Message::TermEvent(event))
@@ -228,37 +257,25 @@ impl<M: Model> Program<M> {
         })
     }
 
-    #[cfg(feature = "termion")]
-    fn spawn_event_reader(&self) -> tokio::task::JoinHandle<Result<(), MessageError>> {
-        use termion::input::TermRead;
-
-        let msg_tx = self.msg_tx.clone();
-        tokio::task::spawn_blocking(move || {
-            let stdin = std::io::stdin();
-            for event in stdin.events().flatten() {
-                msg_tx
-                    .blocking_send(Message::TermEvent(event))
-                    .map_err(|e| MessageError::SendFailure(e.to_string()))?;
-            }
-            Ok(())
-        })
-    }
-
-    fn spawn_message_handler(&mut self) -> Option<JoinHandle<Result<(), MessageError>>> {
+    fn spawn_message_handler(
+        &mut self,
+        cancellation_token: CancellationToken,
+    ) -> Option<JoinHandle<Result<(), MessageError>>> {
         if let Some(mut cmd_rx) = self.cmd_rx.take() {
             let msg_tx = self.msg_tx.clone();
             let cmd_tx = self.cmd_tx.clone();
             let cancellation_tokens = self.cancellation_tokens.clone();
+
             Some(tokio::task::spawn(async move {
-                let mut futs = FuturesUnordered::<JoinHandle<Result<(), MessageError>>>::default();
+                let mut futs = FuturesUnorderedCounter::default();
                 loop {
                     tokio::select! {
                         Some(cmd) = cmd_rx.recv() => {
                             {
                                 let mut cancellation_tokens = cancellation_tokens.lock().unwrap();
-                                if !cancellation_tokens.contains_key(&cmd.name) {
-                                    cancellation_tokens.insert(cmd.name.clone(), CancellationToken::new());
-                                }
+                                    if !cancellation_tokens.contains_key(&cmd.name) {
+                                        cancellation_tokens.insert(cmd.name.clone(), CancellationToken::new());
+                                    }
                             }
                             handle_cmd::<M>(
                                 cmd,
@@ -270,8 +287,16 @@ impl<M: Model> Program<M> {
                         },
                         Some(fut) = futs.next() => {
                             fut.map_err(MessageError::JoinFailure)??;
+                            if cancellation_token.is_cancelled() && futs.is_empty() {
+                                break;
+                            }
+                        },
+                        _ = cancellation_token.cancelled() => {
+                            if futs.is_empty() {
+                                break;
+                            }
                         }
-                        else => break
+
                     }
                 }
                 Ok(())
@@ -295,6 +320,32 @@ impl<M: Model> Program<M> {
             })?;
         }
         Ok(QuitBehavior::Continue)
+    }
+}
+
+#[derive(Default)]
+struct FuturesUnorderedCounter {
+    futures: FuturesUnordered<JoinHandle<Result<(), MessageError>>>,
+    count: usize,
+}
+
+impl FuturesUnorderedCounter {
+    fn push(&mut self, future: JoinHandle<Result<(), MessageError>>) {
+        self.futures.push(future);
+        self.count += 1;
+    }
+
+    async fn next(&mut self) -> Option<Result<Result<(), MessageError>, JoinError>> {
+        let next = self.futures.next().await;
+        if next.is_some() {
+            self.count -= 1;
+        }
+
+        next
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
     }
 }
 
@@ -324,7 +375,7 @@ fn handle_cmd<M: Model>(
     cmd: Command,
     msg_tx: mpsc::Sender<Message>,
     cmd_tx: mpsc::Sender<Command>,
-    futs: &mut FuturesUnordered<JoinHandle<Result<(), MessageError>>>,
+    futs: &mut FuturesUnorderedCounter,
     cancellation_tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
 ) -> Result<(), MessageError> {
     let cancellation_token = cancellation_tokens
