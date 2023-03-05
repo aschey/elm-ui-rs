@@ -160,7 +160,7 @@ impl<M: Model> Program<M> {
         }
     }
 
-    pub async fn run(mut self, writer: &mut M::Writer) -> Result<(), ProgramError<M>> {
+    pub async fn run(mut self, writer: &mut M::Writer) -> Result<M, ProgramError<M>> {
         self.initialize().await?;
         self.view(writer)
             .map_err(ProgramError::ApplicationFailure)?;
@@ -169,21 +169,10 @@ impl<M: Model> Program<M> {
             self.view(writer)
                 .map_err(ProgramError::ApplicationFailure)?;
             if quit_behavior == QuitBehavior::Quit {
-                for token in self.cancellation_tokens.lock().unwrap().values() {
-                    token.cancel();
-                }
-                self.handler_cancellation_token.cancel();
-                if let Some(handler) = self.event_handler_task.take() {
-                    handler.await.unwrap().unwrap();
-                }
-
-                if let Some(handler) = self.message_handler_task.take() {
-                    handler.await.unwrap().unwrap();
-                }
-                return Ok(());
+                return Ok(self.shutdown().await);
             }
         }
-        Ok(())
+        Ok(self.model)
     }
 
     pub fn cmd_tx(&self) -> mpsc::Sender<Command> {
@@ -196,6 +185,26 @@ impl<M: Model> Program<M> {
 
     pub fn view(&self, writer: &mut M::Writer) -> Result<(), M::Error> {
         self.model.view(writer)
+    }
+
+    pub async fn shutdown(mut self) -> M {
+        for token in self.cancellation_tokens.lock().unwrap().values() {
+            token.cancel();
+        }
+
+        self.handler_cancellation_token.cancel();
+        if let Some(handler) = self.event_handler_task.take() {
+            handler.await.unwrap().unwrap();
+        }
+
+        if let Some(handler) = self.message_handler_task.take() {
+            handler.await.unwrap().unwrap();
+        }
+        self.model
+    }
+
+    pub fn into_model(self) -> M {
+        self.model
     }
 
     pub async fn initialize(&mut self) -> Result<(), ProgramError<M>> {
