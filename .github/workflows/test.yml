@@ -14,6 +14,6 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y libpango1.0-dev libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev libxrender-dev libxfixes-dev libpng-dev libgl1-mesa-dev libglu1-mesa-dev
           cargo build
-          (cd examples/termion && cargo build)
-          (cd examples/crossterm && cargo build)
-          (cd examples/fltk && cargo build)
+          (cd crates/elm-ui/examples/termion && cargo build)
+          (cd crates/elm-ui/examples/crossterm && cargo build)
+          (cd crates/elm-ui/examples/fltk && cargo build)
