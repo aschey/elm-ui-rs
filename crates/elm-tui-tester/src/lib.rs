@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tui::{ backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
+use tui::{backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
 
 pub struct TuiTester<M: Model<Writer = Terminal<TestBackend>> + Send + 'static> {
     cmd_tx: mpsc::Sender<Command>,
@@ -25,7 +25,7 @@ impl<M: Model<Writer = Terminal<TestBackend>> + Send + 'static> TuiTester<M> {
         M: Model<Writer = Terminal<TestBackend>> + Send + 'static,
         <M as elm_ui::Model>::Error: std::marker::Send,
     {
-        let mut program = Program::new(model);
+        let mut program = Program::new(model).with_spawn_event_handler(false);
         let cmd_tx = program.cmd_tx();
         let term_view = Arc::new(RwLock::new(terminal.backend().buffer().clone()));
         let term_view_ = term_view.clone();

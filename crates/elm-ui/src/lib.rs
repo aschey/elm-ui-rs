@@ -137,6 +137,8 @@ pub struct Program<M: Model> {
     cmd_rx: Option<mpsc::Receiver<Command>>,
     msg_tx: mpsc::Sender<Message>,
     msg_rx: mpsc::Receiver<Message>,
+    #[cfg(feature = "crossterm")]
+    spawn_event_handler: bool,
     event_handler_task: Option<task::JoinHandle<Result<(), MessageError>>>,
     message_handler_task: Option<JoinHandle<Result<(), MessageError>>>,
     handler_cancellation_token: CancellationToken,
@@ -153,10 +155,20 @@ impl<M: Model> Program<M> {
             cmd_rx: Some(cmd_rx),
             msg_tx,
             msg_rx,
+            #[cfg(feature = "crossterm")]
+            spawn_event_handler: true,
             event_handler_task: None,
             message_handler_task: None,
             handler_cancellation_token: CancellationToken::new(),
             cancellation_tokens: Default::default(),
+        }
+    }
+
+    #[cfg(feature = "crossterm")]
+    pub fn with_spawn_event_handler(self, spawn_event_handler: bool) -> Self {
+        Self {
+            spawn_event_handler,
+            ..self
         }
     }
 
@@ -210,8 +222,10 @@ impl<M: Model> Program<M> {
     pub async fn initialize(&mut self) -> Result<(), ProgramError<M>> {
         #[cfg(feature = "crossterm")]
         {
-            self.event_handler_task =
-                Some(self.spawn_event_reader(self.handler_cancellation_token.clone()));
+            if self.spawn_event_handler {
+                self.event_handler_task =
+                    Some(self.spawn_event_reader(self.handler_cancellation_token.clone()));
+            }
         }
         self.message_handler_task =
             self.spawn_message_handler(self.handler_cancellation_token.clone());

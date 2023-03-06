@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-elm-ui = {path = "../elm-ui"}
+elm-ui = {path = "../elm-ui", features = ["crossterm"]}
 tokio = {version = "1.26.0", features = ["time", "rt-multi-thread"]}
 tokio-util = "0.7.7"
 tui = "0.19.0"
