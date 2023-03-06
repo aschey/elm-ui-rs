@@ -99,6 +99,12 @@ where
         self.cmd_tx.send(Command::simple(msg)).await.unwrap();
     }
 
+    #[cfg(feature = "crossterm")]
+    pub async fn send_key(&self, key_event: crossterm::event::KeyEvent) {
+        self.send_msg(Message::TermEvent(crossterm::event::Event::Key(key_event)))
+            .await;
+    }
+
     pub async fn wait_for(&self, mut f: impl FnMut(&O) -> bool) -> Result<(), O> {
         for _ in 0..100 {
             if f(&self.term_view.read().unwrap()) {

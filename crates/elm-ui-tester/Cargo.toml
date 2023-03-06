@@ -6,7 +6,12 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+crossterm = {version = "0.25", features = ["event-stream"], optional = true}
 elm-ui = {path = "../elm-ui", features = ["crossterm"]}
 tokio = {version = "1.26.0", features = ["time", "rt-multi-thread"]}
 tokio-util = "0.7.7"
 tui = {version = "0.19.0", optional = true}
+
+[features]
+crossterm = ["dep:crossterm"]
+tui = ["dep:tui"]
