@@ -60,7 +60,7 @@ fn spawn_event_reader(cmd_tx: mpsc::Sender<Command>) {
                 ))))
                 .unwrap();
             if matches!(event, Key::Char('q')) {
-                // Need to ensure we drop the stdin reference cleanly here
+                // Need to ensure we drop the stdin reference cleanly here or the terminal state won't be restored properly
                 return;
             }
         }
