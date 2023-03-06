@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "tui")]
 use tui::{backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
 
-pub struct TuiTester<M: Model + Send + 'static, O: Clone + Send + Sync + 'static>
+pub struct UiTester<M: Model + Send + 'static, O: Clone + Send + Sync + 'static>
 where
     M::Writer: Send + 'static,
 {
@@ -23,7 +23,7 @@ where
 }
 
 #[cfg(feature = "tui")]
-impl<M: Model + Send + 'static + Send + 'static> TuiTester<M, Buffer>
+impl<M: Model + Send + 'static + Send + 'static> UiTester<M, Buffer>
 where
     M: Model<Writer = Terminal<TestBackend>> + Send + 'static,
 {
@@ -35,7 +35,7 @@ where
     }
 }
 
-impl<M: Model + Send + 'static, O: Clone + Send + Sync + 'static> TuiTester<M, O>
+impl<M: Model + Send + 'static, O: Clone + Send + Sync + 'static> UiTester<M, O>
 where
     M::Writer: Send + 'static,
 {
