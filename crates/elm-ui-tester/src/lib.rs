@@ -5,7 +5,7 @@ use elm_ui::{
 use std::{
     sync::{Arc, RwLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -105,14 +105,25 @@ where
             .await;
     }
 
-    pub async fn wait_for(&self, mut f: impl FnMut(&O) -> bool) -> Result<(), O> {
-        for _ in 0..100 {
+    pub async fn wait_for(&self, f: impl FnMut(&O) -> bool) -> Result<(), O> {
+        self.wait_for_timeout(f, Duration::from_secs(5)).await
+    }
+
+    pub async fn wait_for_timeout(
+        &self,
+        mut f: impl FnMut(&O) -> bool,
+        timeout: Duration,
+    ) -> Result<(), O> {
+        let start = Instant::now();
+        loop {
             if f(&self.term_view.read().unwrap()) {
                 return Ok(());
             }
+            if Instant::now().duration_since(start) > timeout {
+                return Err(self.term_view.read().unwrap().clone());
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        return Err(self.term_view.read().unwrap().clone());
     }
 
     pub fn wait_for_completion(self) -> Result<(M, O), ProgramError<M>> {
