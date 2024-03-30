@@ -4,16 +4,16 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use elm_ui::{Command, Message, Model, OptionalCommand, Program};
-use std::{
-    error::Error,
-    io::{self, Stdout},
-    sync::Arc,
-};
-use tui::{
+use ratatui::{
     backend::CrosstermBackend,
     style::{Color, Style},
     widgets::{List, ListItem, ListState},
     Frame, Terminal,
+};
+use std::{
+    error::Error,
+    io::{self},
+    rc::Rc,
 };
 
 #[tokio::main]
@@ -50,7 +50,7 @@ pub struct App {
 }
 
 impl App {
-    fn ui(&self, f: &mut Frame<CrosstermBackend<Stdout>>) {
+    fn ui(&self, f: &mut Frame) {
         let items: Vec<ListItem> = self
             .list_items
             .iter()
@@ -74,7 +74,7 @@ impl Model for App {
         )))))
     }
 
-    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: Rc<Message>) -> Result<OptionalCommand, Self::Error> {
         match msg.as_ref() {
             Message::Custom(msg) => {
                 if let Some(AppMessage::SetListItems(items)) = msg.downcast_ref::<AppMessage>() {

@@ -2,6 +2,8 @@ use elm_ui::{
     future_ext::{CancelledByShutdown, FutureExt},
     Command, Message, Model, Program, ProgramError, QuitBehavior,
 };
+#[cfg(feature = "tui")]
+use ratatui::{backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
 use std::{
     sync::{Arc, RwLock},
     thread,
@@ -9,8 +11,6 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-#[cfg(feature = "tui")]
-use tui::{backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
 
 pub struct UiTester<M: Model + Send + 'static, O: Clone + Send + Sync + 'static>
 where
@@ -152,7 +152,7 @@ impl TerminalView for Buffer {
         for row in 0..*height {
             for col in 0..*width {
                 let cell = self.get(col, row);
-                write!(&mut string_buf, "{}", cell.symbol).unwrap();
+                write!(&mut string_buf, "{}", cell.symbol()).unwrap();
             }
             writeln!(&mut string_buf).unwrap();
         }

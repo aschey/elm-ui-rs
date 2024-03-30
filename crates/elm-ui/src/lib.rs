@@ -8,6 +8,7 @@ use std::{
     fmt::Debug,
     future::{self, Future},
     pin::Pin,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -127,7 +128,7 @@ pub trait Model {
     type Error: std::error::Error + ToString;
 
     fn init(&mut self) -> Result<OptionalCommand, Self::Error>;
-    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error>;
+    fn update(&mut self, msg: Rc<Message>) -> Result<OptionalCommand, Self::Error>;
     fn view(&self, writer: &mut Self::Writer) -> Result<(), Self::Error>;
 }
 
@@ -335,7 +336,7 @@ impl<M: Model> Program<M> {
         }
         if let Some(cmd) = self
             .model
-            .update(Arc::new(msg))
+            .update(Rc::new(msg))
             .map_err(ProgramError::ApplicationFailure)?
         {
             self.cmd_tx.send(cmd).await.map_err(|e| {
@@ -452,7 +453,7 @@ async fn handle_msg<M: Model>(
             let msg_tx = msg_tx.clone();
             let cmd_tx = cmd_tx.clone();
             futs.push(tokio::task::spawn(async move {
-                handle_sequence_cmd::<M>(cmds, cmd_tx, msg_tx, cancellation_tokens).await
+                handle_sequence_cmd(cmds, cmd_tx, msg_tx, cancellation_tokens).await
             }));
         }
         Some(Message::Stream(mut rx)) => {
@@ -504,7 +505,7 @@ async fn handle_msg<M: Model>(
     Ok(())
 }
 
-async fn handle_sequence_cmd<M: Model>(
+async fn handle_sequence_cmd(
     cmds: Vec<Command>,
     cmd_tx: mpsc::Sender<Command>,
     msg_tx: mpsc::Sender<Message>,

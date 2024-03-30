@@ -1,27 +1,27 @@
 use elm_ui::{Command, Message, Model, OptionalCommand, Program};
-use std::{
-    error::Error,
-    io::{self, Stdout},
-    sync::Arc,
-};
-use termion::{
-    event::Key,
-    input::TermRead,
-    raw::{IntoRawMode, RawTerminal},
-    screen::AlternateScreen,
-};
-use tokio::{sync::mpsc, task};
-use tui::{
+use ratatui::{
     backend::{Backend, TermionBackend},
     style::{Color, Style},
     widgets::{List, ListItem, ListState},
     Frame, Terminal,
 };
+use std::{
+    error::Error,
+    io::{self, Stdout},
+    rc::Rc,
+};
+use termion::{
+    event::Key,
+    input::TermRead,
+    raw::{IntoRawMode, RawTerminal},
+    screen::{AlternateScreen, IntoAlternateScreen},
+};
+use tokio::{sync::mpsc, task};
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     let stdout = io::stdout().into_raw_mode()?;
-    let stdout = AlternateScreen::from(stdout);
+    let stdout = stdout.into_alternate_screen()?;
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -77,7 +77,7 @@ impl Model for App {
         )))))
     }
 
-    fn update(&mut self, msg: Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: Rc<Message>) -> Result<OptionalCommand, Self::Error> {
         if let Message::Custom(msg) = msg.as_ref() {
             if let Some(msg) = msg.downcast_ref::<AppMessage>() {
                 match msg {
@@ -123,7 +123,7 @@ impl Model for App {
     }
 }
 
-fn ui(f: &mut Frame<TermionBackend<AlternateScreen<RawTerminal<Stdout>>>>, app: &App) {
+fn ui(f: &mut Frame, app: &App) {
     let items: Vec<ListItem> = app
         .list_items
         .iter()

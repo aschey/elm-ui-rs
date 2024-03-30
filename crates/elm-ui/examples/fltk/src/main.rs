@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{io, rc::Rc, time::Duration};
 
 use elm_ui::{Command, Message, Model, OptionalCommand, Program};
 use fltk::{
@@ -91,7 +91,7 @@ impl Model for App {
         })))
     }
 
-    fn update(&mut self, msg: std::sync::Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: Rc<Message>) -> Result<OptionalCommand, Self::Error> {
         if let Message::Custom(custom_msg) = msg.as_ref() {
             if let Some(msg) = custom_msg.downcast_ref::<AppMessage>() {
                 match msg {

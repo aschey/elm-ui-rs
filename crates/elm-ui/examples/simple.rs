@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     io::{self, Write},
+    rc::Rc,
     time::Duration,
 };
 
@@ -32,7 +33,7 @@ impl Model for App {
         })))
     }
 
-    fn update(&mut self, msg: std::sync::Arc<Message>) -> Result<OptionalCommand, Self::Error> {
+    fn update(&mut self, msg: Rc<Message>) -> Result<OptionalCommand, Self::Error> {
         if let Message::Custom(custom_msg) = msg.as_ref() {
             if let Some(TickMsg(seq_num)) = custom_msg.downcast_ref() {
                 let seq_num = *seq_num;
