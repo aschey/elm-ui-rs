@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 name = "elm-ui"
 readme = "README.md"
 repository = "https://github.com/aschey/elm-ui-rs"
-version = "0.0.1-dev"
+version = "0.0.2-dev"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
