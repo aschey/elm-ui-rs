@@ -131,7 +131,7 @@ fn ui(f: &mut Frame, app: &App) {
         .collect();
     f.render_stateful_widget(
         List::new(items).highlight_style(Style::default().fg(Color::Green).bg(Color::Black)),
-        f.size(),
+        f.area(),
         &mut app.list_state.clone(),
     )
 }

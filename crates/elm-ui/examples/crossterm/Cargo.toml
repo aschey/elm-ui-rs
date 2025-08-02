@@ -1,10 +1,10 @@
 [package]
-edition = "2021"
+edition = "2024"
 name = "crossterm_example"
 version = "0.1.0"
 
 [dependencies]
-crossterm = { version = "0.27", features = ["event-stream"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
 elm-ui = { path = "../..", default-features = false, features = ["crossterm"] }
 tokio = { version = "1.37.0", features = ["sync", "rt-multi-thread", "macros"] }
-ratatui = { version = "0.26.1" }
+ratatui = { version = "0.29" }
