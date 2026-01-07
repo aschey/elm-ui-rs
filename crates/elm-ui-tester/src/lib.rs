@@ -1,9 +1,9 @@
 use elm_ui::{
-    future_ext::{CancelledByShutdown, FutureExt},
     Command, Message, Model, Program, ProgramError, QuitBehavior,
+    future_ext::{CancelledByShutdown, FutureExt},
 };
 #[cfg(feature = "tui")]
-use ratatui::{backend::TestBackend, buffer::Buffer, layout::Rect, Terminal};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
 use std::{
     sync::{Arc, RwLock},
     thread,
@@ -151,7 +151,7 @@ impl TerminalView for Buffer {
         let mut string_buf = String::with_capacity((width * height) as usize);
         for row in 0..*height {
             for col in 0..*width {
-                let cell = self.get(col, row);
+                let cell = &self[(col, row)];
                 write!(&mut string_buf, "{}", cell.symbol()).unwrap();
             }
             writeln!(&mut string_buf).unwrap();
